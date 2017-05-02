@@ -1,0 +1,100 @@
+﻿#pragma kernel ClearVectorBuffer
+
+RWStructuredBuffer<float2> buffer;
+
+[numthreads(64,1,1)]
+void ClearVectorBuffer (uint3 id : SV_DispatchThreadID)
+{
+	buffer[id.x] = float2(0,0);
+}
+
+#pragma kernel ParticleTest
+
+struct Particle
+{
+	float2 position;
+	float2 speed;
+	float2 acceleration;
+	float4 color;
+};
+
+RWStructuredBuffer<Particle> particleBuffer;
+RWStructuredBuffer<float2> gridBuffer;
+float deltaTime;
+
+int getIndex (uint2 position)
+{
+	return position.x + position.y * 64;
+}
+
+uint2 getPosition (int index)
+{
+	return uint2(index & 63, index & 4032 >> 6);
+}
+
+float2 calculateForce (float2 a, float2 b)
+{
+	a = a - b;
+	float isNotSame = min(ceil(a.x * a.x + a.y * a.y - 0.001), 1);
+	//float dist = (a.x * a.x + a.y * a.y);
+	//float force = 1.0 / max(dist, 0.01);
+	float dist = sqrt(a.x * a.x + a.y * a.y);
+	float zero = 0.05;
+	float e = 0.02;
+	//float rm = 1.7;
+	dist = dist;
+	float force = min(pow(abs(1/dist - 1) - 0.8, 4), 3);//max(4 - (1 / dist + dist), -4);//e * abs(pow(zero / dist, 12) - pow(zero / dist, 6));
+	return (a == float2(0, 0)) ? float2(0, 0) : a * force * 4;//min(max(lerp(a * force, float2(0, 0), 1 - isNotSame), float2(-1000000,-1000000)), float2(1000000,1000000));
+}
+
+float2 calculateReflections (float2 pos, float2 speed)
+{
+	speed = speed * (clamp(ceil(4 - pos), 0, 1) * 2 - 1);
+	speed = speed * (clamp(ceil(4 + pos), 0, 1) * 2 - 1);
+	return speed;
+}
+
+float2 wrapPosition (float2 position)
+{
+	return float2(position % 64);
+}
+
+[numthreads(64,1,1)]
+void ParticleTest (uint3 id : SV_DispatchThreadID)
+{
+	int index = id.x;
+	float2 speed = deltaTime * particleBuffer[index].acceleration + particleBuffer[index].speed;
+	speed = speed * 0.99; //This is friction
+	float2 position = deltaTime * speed + particleBuffer[index].position;
+	particleBuffer[index].position = position;
+	particleBuffer[index].speed = calculateReflections(position, speed);
+	float2 clampedPosition = clamp(position, 0, 63);
+
+	/*float2 tmpacc = float2(0,0);
+
+	float2 tmppos = float2(0,0);
+	for(int i = -1; i < 2; i++)
+	{
+		for(int j = -1; j < 2; j++)
+		{
+			gridBuffer[getIndex(floor(wrapPosition(position + float2(i, j))))] += calculateForce(position, wrapPosition(position + float2(i, j)));
+			tmpacc /*+*//*-= gridBuffer[getIndex(floor(wrapPosition(position + float2(i, j))))]; //Preprocess and postprocess for extra details
+		}
+	}
+	particleBuffer[index].acceleration = tmpacc / 27;*/
+
+	//particleBuffer[index].acceleration /*+*/= gridBuffer[getIndex(floor(clampedPosition))]; //Preprocess and postprocess for extra details
+	
+	float2 tmpacc = float2(0,0);
+	for(int i = 0; i < 16384; i++)
+		tmpacc += calculateForce(position, particleBuffer[i].position);
+	particleBuffer[index].acceleration = tmpacc / 16384;
+
+	particleBuffer[index].color.xy = abs(particleBuffer[index].acceleration) % 1;
+	float2 tmp = particleBuffer[index].acceleration;
+	tmp = tmp * tmp;
+	particleBuffer[index].color.z = sqrt(tmp.x + tmp.y);
+	particleBuffer[index].color.w = 1;// = (particleBuffer[index].acceleration.x + particleBuffer[index].acceleration.y);
+	//particleBuffer[index].color.xyz = 1;
+	//particleBuffer[index].color.w = 0.5;
+}
